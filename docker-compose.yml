@@ -1,0 +1,36 @@
+name: moge
+services:
+  laravel.test:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      args:
+        WWWGROUP: '${WWWGROUP:-1000}'
+        WWWUSER: '${WWWUSER:-1000}'
+    ports:
+      - '127.0.0.1:${APP_PORT:-8000}:80'
+    environment:
+      LARAVEL_SAIL: 1
+      COMPOSER_HOME: /tmp/sail-composer
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      mysql:
+        condition: service_healthy
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: '${DB_DATABASE:-laravel}'
+      MYSQL_USER: '${DB_USERNAME:-laravel}'
+      MYSQL_PASSWORD: '${DB_PASSWORD:-laravel}'
+      MYSQL_ROOT_PASSWORD: local-root-password
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_PASSWORD mysql -h 127.0.0.1 -u$$MYSQL_USER $$MYSQL_DATABASE -e 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+volumes:
+  db-data:
