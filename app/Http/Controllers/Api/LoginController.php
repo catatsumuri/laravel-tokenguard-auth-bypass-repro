@@ -24,12 +24,21 @@ class LoginController extends Controller
         }
 
         $token = Str::random(64);
-        $user->api_token = $token;
+        $user->api_token = hash('sha256', $token);
         $user->save();
 
         return response()->json([
             'token_type' => 'Bearer',
             'access_token' => $token,
         ])->header('Cache-Control', 'no-store');
+    }
+
+    public function destroy(Request $request)
+    {
+        $user = $request->user();
+        $user->api_token = null;
+        $user->save();
+
+        return response()->noContent();
     }
 }

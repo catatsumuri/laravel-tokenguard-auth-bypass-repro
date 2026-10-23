@@ -16,7 +16,8 @@ use App\Http\Controllers\Api\UserController;
 |
 */
 
-Route::post('/login', [LoginController::class, 'store']);
+Route::middleware('throttle:login')->post('/login', [LoginController::class, 'store']);
+Route::middleware('auth:api')->post('/logout', [LoginController::class, 'destroy']);
 Route::middleware('auth:api')->get('/users', [UserController::class, 'index']);
 
 Route::middleware('auth:api')->get('/user', function (Request $request) {
