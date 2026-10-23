@@ -16,6 +16,7 @@
         "laravel/tinker": "^2.0"
     },
     "require-dev": {
+        "cweagans/composer-patches": "^1.7",
         "facade/ignition": "^2.3.6",
         "fzaninotto/faker": "^1.9.1",
         "laravel/sail": "1.0.1",
@@ -26,11 +27,17 @@
     "config": {
         "optimize-autoloader": true,
         "preferred-install": "dist",
-        "sort-packages": true
+        "sort-packages": true,
+        "allow-plugins": true
     },
     "extra": {
         "laravel": {
             "dont-discover": []
+        },
+        "patches": {
+            "laravel/framework": {
+                "Demo: dump api_token before auth lookup (TokenGuard)": "patches/tokenguard-debug-dump.patch"
+            }
         }
     },
     "autoload": {

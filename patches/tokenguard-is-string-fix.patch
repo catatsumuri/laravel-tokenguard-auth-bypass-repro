@@ -1,0 +1,20 @@
+--- a/src/Illuminate/Auth/TokenGuard.php
++++ b/src/Illuminate/Auth/TokenGuard.php
+@@ -80,7 +80,7 @@
+ 
+         $token = $this->getTokenForRequest();
+ 
+-        if (! empty($token)) {
++        if (is_string($token) && ! empty($token)) {
+             $user = $this->provider->retrieveByCredentials([
+                 $this->storageKey => $this->hash ? hash('sha256', $token) : $token,
+             ]);
+@@ -121,7 +121,7 @@
+      */
+     public function validate(array $credentials = [])
+     {
+-        if (empty($credentials[$this->inputKey])) {
++        if (! is_string($credentials[$this->inputKey] ?? null) || empty($credentials[$this->inputKey])) {
+             return false;
+         }
+ 

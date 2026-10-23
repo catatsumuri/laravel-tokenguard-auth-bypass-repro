@@ -136,6 +136,37 @@ Avoid undocumented, one-off edits inside `vendor/`: Composer can overwrite them.
 
 This backport addresses **this specific authentication bypass only**. It does not restore security support to an end-of-life Laravel release or address other known vulnerabilities.
 
+### How this repository manages patches
+
+This is a worked example of the "maintain a reproducible patch" advice above, using [`cweagans/composer-patches`](https://github.com/cweagans/composer-patches) so edits to `vendor/` survive a fresh `composer install`:
+
+```json
+"extra": {
+    "patches": {
+        "laravel/framework": {
+            "Demo: dump api_token before auth lookup (TokenGuard)": "patches/tokenguard-debug-dump.patch"
+        }
+    }
+}
+```
+
+* `patches/tokenguard-debug-dump.patch` is **wired in and active by default**. It inserts a `print_r($token); exit;` marker in `TokenGuard::user()` so that submitting an array-valued `api_token` visibly dumps a PHP array instead of a string — this repository's purpose is reproduction, so the vulnerable behavior stays on by default.
+* `patches/tokenguard-is-string-fix.patch` contains the real backport (the two diffs shown above) but is **deliberately not referenced from `extra.patches`**, so it never applies on its own.
+
+To verify the real fix instead of the demo marker, swap which patch is registered, then reinstall `laravel/framework` so the plugin reapplies it:
+
+```sh
+# edit extra.patches.laravel/framework above to point at
+# patches/tokenguard-is-string-fix.patch instead, then:
+rm -rf vendor composer.lock
+composer install --prefer-dist --no-interaction
+# the install log should read:
+#   Applying patches for laravel/framework
+#       patches/tokenguard-is-string-fix.patch (...)
+```
+
+After switching, a request with an array-valued `api_token` should receive HTTP 401 instead of reaching the database.
+
 ## Verification checklist
 
 After applying the fix, confirm that:
