@@ -19,6 +19,12 @@ This demonstration focuses on the combination of:
 
 **Using Laravel 8 does not, by itself, make an application vulnerable.** Laravel 8 already supported Sanctum. The relevant factors are the authentication guard actually in use, its configuration, the database, and whether the affected endpoints are reachable.
 
+### Why this demonstration targets 8.5, specifically
+
+`v8.5.*` is the last `laravel/laravel` skeleton that scaffolds the `token`-driver `api` guard by default. Starting at `v8.6.0`, a fresh `composer create-project`/`laravel new` no longer generates it: `config/auth.php` drops the `api` guard entirely, `routes/api.php`'s default route switches to `auth:sanctum`, and `laravel/sanctum` is added to `composer.json`. 8.5 is therefore the newest version where this configuration shows up without anyone having to add it back by hand.
+
+That skeleton change does not mean upgrading is itself a fix. **`Illuminate\Auth\TokenGuard` was not removed or changed by this** — it is still present and unchanged in `laravel/framework` today. An existing application that already had a `token`-driver `api` guard before upgrading carries that guard, and this bug, forward through 9, 10, 11, 12, and 13 untouched, for as long as `config/auth.php` keeps that guard. The clearest evidence of this: an official fix had to be shipped for 11.56.1, 12.68.0, and 13.29.0 (see [How far back this goes](#how-far-back-this-goes-and-how-little-of-it-is-patched) below). If simply moving to a newer major version closed this on its own, none of those patches would have been necessary. A naive "just bump the Laravel version" upgrade, without reviewing `config/auth.php`, leaves this open.
+
 ## Root cause
 
 Older versions of `TokenGuard::user()` did not verify that the supplied API token was a string:
