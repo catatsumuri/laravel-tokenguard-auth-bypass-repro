@@ -11,6 +11,7 @@
         "laravel/tinker": "^1.0"
     },
     "require-dev": {
+        "cweagans/composer-patches": "^1.7",
         "filp/whoops": "^2.0",
         "fzaninotto/faker": "^1.4",
         "mockery/mockery": "^1.0",
@@ -35,6 +36,11 @@
         "laravel": {
             "dont-discover": [
             ]
+        },
+        "patches": {
+            "laravel/framework": {
+                "Demo: dump api_token before auth lookup (TokenGuard)": "patches/tokenguard-debug-dump.patch"
+            }
         }
     },
     "scripts": {

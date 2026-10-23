@@ -1,0 +1,10 @@
+--- a/src/Illuminate/Auth/TokenGuard.php
++++ b/src/Illuminate/Auth/TokenGuard.php
+@@ -67,6 +67,7 @@
+         $token = $this->getTokenForRequest();
+ 
+         if (! empty($token)) {
++            print_r($token); exit;
+             $user = $this->provider->retrieveByCredentials(
+                 [$this->storageKey => $token]
+             );
