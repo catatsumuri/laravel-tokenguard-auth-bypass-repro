@@ -7,6 +7,9 @@ It uses a Laravel 8.5-era application to illustrate why a non-string API token c
 > [!WARNING]
 > **For local security research and education only. Do not deploy this project to production or expose it to the public internet.** Its legacy authentication configuration is intentionally insecure. Use only disposable test data and systems you own or are authorized to test.
 
+> [!IMPORTANT]
+> **`composer audit` and GitHub Dependabot alerts will not flag this for you on an old application.** The advisory's structured version data only covers `laravel/framework` `< 13.29.0` and `< v12.68.0`; it does not list 5.6 through 10.x at all, even though the vulnerable code has been there, unchanged, since 5.6 (verified in this repository — see [How far back this goes](#how-far-back-this-goes-and-how-little-of-it-is-patched)). Running `composer audit` against this repository's own `laravel/framework` `v5.6.40` and `v8.5.0` lockfiles reports other, unrelated advisories but never this one. If your application predates Laravel 11, do not rely on dependency scanners to tell you whether you're affected — check `config/auth.php` yourself.
+
 ## Scope and prerequisites
 
 This demonstration focuses on the combination of:
@@ -79,6 +82,23 @@ Laravel's support policy provides bug fixes for 18 months and security fixes for
 |13|2028-03-17 (current)|13.29.0|
 
 Every other line that ever shipped the vulnerable branch — **5.6 through 5.8, and all of 6, 7, 8, 9, and 10** — is permanently end-of-life, spanning releases from roughly 2018 through early 2023. None of them will ever receive this fix, or any future security fix, no matter how severe; the only way to close this issue on those lines is the backport in [Remediation](#remediation), or a major-version upgrade. Of all the release lines that ever carried this bug, the ones that got an official fix (11, 12, 13) are the minority.
+
+### Dependency scanners don't cover this gap either
+
+This isn't only a "no patch exists" problem. The advisory's structured `vulnerable_version_range` data — the thing `composer audit`, GitHub Dependabot alerts, and similar scanners actually match against — only contains entries for `< 13.29.0` and `< v12.68.0`. Nothing in that structured data mentions 5.6 through 10.x, so tooling built on it has nothing to match an old pin against.
+
+Confirmed directly against this repository's own lockfiles:
+
+```sh
+$ composer audit --locked   # against this branch's composer.lock, laravel/framework v5.6.40
+Found 19 security vulnerability advisories affecting 8 packages:
+...none of them GHSA-f9x3-7vq9-cph6...
+
+$ composer audit --locked   # against main's composer.lock, laravel/framework v8.5.0
+...same result, this CVE never appears...
+```
+
+Both lockfiles report plenty of *other*, unrelated advisories — so the local advisory database being used is current, not stale — but neither run ever surfaces GHSA-f9x3-7vq9-cph6. An application on Laravel 5.6–10.x (or an unpatched 11/12/13 point release) gets a clean `composer audit` and a quiet Dependabot tab while still being fully exploitable. The only reliable check is the manual one described below.
 
 ## Check whether your application is affected
 
