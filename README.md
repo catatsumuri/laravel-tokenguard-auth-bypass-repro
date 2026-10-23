@@ -50,6 +50,30 @@ These are **observations from one local environment**, not guaranteed outcomes f
 
 **Important:** `hash => true` is *not* a complete fix. The exception is an incidental barrier in the normal `user()` path, and older `TokenGuard::validate()` implementations also lack the necessary type check. A proper patch validates the input type explicitly.
 
+## How far back this goes, and how little of it is patched
+
+The vulnerable code is not new. The branch inside `EloquentUserProvider::retrieveByCredentials()` that turns an array-valued credential into a `whereIn()` condition was introduced in **Laravel 5.6** and has been present, unchanged, through every release since — including the current `13.x` line, where the general-purpose `whereIn()` behavior itself was intentionally kept; only `TokenGuard`'s failure to reject non-string input was fixed.
+
+Verified locally, including in the sibling `laravel-5.6` branch of this repository:
+
+|Laravel version|Result when an array-valued `api_token` is submitted|
+|-|-|
+|5.5.28 (`composer create-project laravel/laravel:5.5.*`, checked ad hoc — not kept as a branch)|`EloquentUserProvider` has no array branch; a plain `where()` call receives the array and the query fails with `SQLSTATE[HY000]: ... column index out of range`. **Not exploitable.**|
+|5.6.40 (`laravel-5.6` branch)|Array reaches `whereIn()`; authenticates without a valid token.|
+|8.5.0 (`laravel-8.5` branch / `main`)|Same as 5.6.40.|
+
+**5.6 is the first affected version.** Everything from 5.6 onward carries the same `whereIn()` branch; 5.5 and earlier do not.
+
+Laravel's support policy provides bug fixes for 18 months and security fixes for 2 years, counted from each major version's release, and normally only the current major receives bug fixes at all. In practice, this issue has an official fix in exactly three release lines:
+
+|Version|Security fixes until|Fixed in|
+|-|-|-|
+|11|2026-03-12 (already ended)|11.56.1|
+|12|2027-02-24|12.68.0|
+|13|2028-03-17 (current)|13.29.0|
+
+Every other line that ever shipped the vulnerable branch — **5.6 through 5.8, and all of 6, 7, 8, 9, and 10** — is permanently end-of-life, spanning releases from roughly 2018 through early 2023. None of them will ever receive this fix, or any future security fix, no matter how severe; the only way to close this issue on those lines is the backport in [Remediation](#remediation), or a major-version upgrade. Of all the release lines that ever carried this bug, the ones that got an official fix (11, 12, 13) are the minority.
+
 ## Check whether your application is affected
 
 Start by reviewing your registered routes:
@@ -130,3 +154,6 @@ Keep all reproduction tests isolated, with dummy accounts and a database that co
 * [Laravel 8.5.0 `TokenGuard.php`](https://github.com/laravel/framework/blob/v8.5.0/src/Illuminate/Auth/TokenGuard.php)
 * [Laravel 8.5.0 `EloquentUserProvider.php`](https://github.com/laravel/framework/blob/v8.5.0/src/Illuminate/Auth/EloquentUserProvider.php)
 * [Laravel 11.56.1 `TokenGuard.php` (patched)](https://github.com/laravel/framework/blob/v11.56.1/src/Illuminate/Auth/TokenGuard.php)
+* [Laravel support policy](https://github.com/laravel/docs/blob/13.x/releases.md#support-policy)
+* `laravel-5.6` branch of this repository — same reproduction on a fresh Laravel 5.6.40 install (affected)
+* `laravel-8.5` branch of this repository — snapshot of this branch's Laravel 8.5 state
