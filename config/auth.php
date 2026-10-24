@@ -44,7 +44,10 @@ return [
         'api' => [
             'driver' => 'token',
             'provider' => 'users',
-            'hash' => true,
+            // Left omitted on purpose, as this repository's default: older
+            // TokenGuard treats a missing `hash` as false, which is the
+            // vulnerable configuration GHSA-f9x3-7vq9-cph6 is about. See README.md.
+            // 'hash' => true,
         ],
     ],
 
