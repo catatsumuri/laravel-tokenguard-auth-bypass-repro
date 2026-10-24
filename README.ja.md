@@ -25,31 +25,15 @@ docker compose exec -u sail laravel.test php artisan migrate --seed
 
 デモ用ユーザー（`demo@example.com` / `password`）と、ランダムな 9 ユーザーが作成されます。アプリは `http://localhost:8000` で起動します（8000 番が使用中なら `.env` の `APP_PORT` を変更してください）。
 
-ログインもトークンも、認証情報も一切なしで、配列の `api_token` を保護されたルートに直接送ります。
+### バイパスは1リクエストだけ
+
+既定ではパッチは登録されておらず、`config/auth.php` の `guards.api.hash` も既定で省略されています。古い `TokenGuard` は `hash` が無いとき `false` として扱うので、これが今回の脆弱性の対象となる構成です。さらに、Seeder がデモユーザーに固定の `api_token`（`sha256('fixed-demo-seed')`）を仕込んでいて、これは MySQL の文字列→数値変換で `0` になるよう選んだ値です。なので seed した直後、ログインもトークンもパスワードも無しで：
 
 ```bash
-curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
-  --data-urlencode 'api_token[]=x'
+curl -i -X GET http://localhost:8000/api/user --json '{"api_token":[0]}'
 ```
 
-既定ではパッチは登録されていないため、`TokenGuard::user()` はそのまま動作し、配列が `hash()` と `EloquentUserProvider` にそのまま渡されます。既定の `hash => true` では、途中で拒否されるのではなく HTTP 500 になります（下記参照）。未認証のリクエスト1発だけで、配列の入力がガードまで届いていることを確認できます。
-
-次に、ログインしてトークンを取得します。これは、この後の通常の認証確認と、下のバイパステストで使う `api_token` をDBに保存するために必要です。
-
-```bash
-curl -s -X POST http://localhost:8000/api/login \
-  -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"email":"demo@example.com","password":"password"}'
-```
-
-ログインで取得した `access_token` を使い、通常の認証を確認します（既定の `hash => true` の場合）。
-
-```bash
-curl -i http://localhost:8000/api/user -H 'Accept: application/json' \
-  -H 'Authorization: Bearer <access_token>'
-```
-
-次に、数値要素を含む JSON 配列を送ります。クエリ文字列の `api_token[]=0` は文字列の配列になるため、この数値比較の再現には使いません。
+これで **HTTP 200** が返り、デモユーザーの情報がそのまま取得できます。`--json`（curl 7.82 以降）は `Content-Type`/`Accept` を `application/json` にして body を送りますが、暗黙で `-X POST` にもなるため、ルートのメソッドを保つには `--json` の後に `-X GET` を置く必要があります（付けないと HTTP 405 になります）。古い curl では展開して書いてください：
 
 ```bash
 curl -i -X GET http://localhost:8000/api/user \
@@ -57,11 +41,30 @@ curl -i -X GET http://localhost:8000/api/user \
   -d '{"api_token":[0]}'
 ```
 
-未修正の状態では、`hash => true` で HTTP 500 が観測されています。`config/auth.php` の `guards.api.hash` を `false` に変更し、`php artisan config:clear` をコンテナ内で実行して同じリクエストを送ると、数値比較に一致するトークンが保存されている場合は認証がバイパスされます。結果は保存値にも依存します。初期シードの `api_token` はすべて `null` なので、先にログインしてトークンを保存する必要があります。`hash` の変更だけなら Composer の再実行は不要です。
+なぜ通るか：`TokenGuard::user()` には `is_string()` のチェックが無いため、配列 `[0]` は `! empty($token)` を通過して `EloquentUserProvider::retrieveByCredentials()` に渡り、そこで配列値は `whereIn('api_token', [0])` になります。MySQL/MariaDB は保存された文字列と整数 `0` を比較する際、文字列の**先頭から連続する数字部分**を読んで数値変換します（今回はハッシュの先頭が英字なので数字部分が無く、結果は `0`）。クエリ文字列で送る場合（`curl -G --data-urlencode 'api_token[]=0'`）は**これを再現しません**。クエリ文字列の値は常に PHP の文字列になり、文字列同士の完全一致比較にしかならず、数値への変換は起きないからです。
+
+実際のアプリでは攻撃者が保存トークンの値を選べるわけではありませんが、数値変換は保存ハッシュの先頭1文字にしか依存しないため、`0`〜`9` を試せばほぼすべてのケースを網羅できます。仕組みの詳細は[`docs/analysis.ja.md`](docs/analysis.ja.md)を参照してください。
+
+### 通常の認証が動くことも確認する
+
+ログインすると、固定のデモトークンは新しいランダムなトークンに上書きされます。なので、この確認は上のバイパステストの**後**に行ってください：
+
+```bash
+curl -s -X POST http://localhost:8000/api/login \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"email":"demo@example.com","password":"password"}'
+
+curl -i http://localhost:8000/api/user -H 'Accept: application/json' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+### `hash => true` はクラッシュするだけで修正ではない
+
+`config/auth.php` の `'hash' => true,` のコメントを外し、`php artisan config:clear` をコンテナ内で実行してから、同じバイパスリクエストを再送してください。HTTP 200 ではなく **HTTP 500** になります。これは `hash('sha256', $token)` が比較の前に配列を拒否してクラッシュするからです。これは「正しく拒否された」のではなく「たまたま落ちた」だけです — `hash => true` が修正にならない理由は[下の影響確認手順](#1-自分のアプリは影響を受けるか約-1-分)も参照してください。再びコメントアウトして（`config:clear` も忘れずに）このリポジトリの既定の脆弱な状態（`hash` 省略 = `false` 扱い）に戻します。
 
 ### ✅ 修正を適用して効果を確認する
 
-ここまでは**未修正**のまま、`hash => true` で HTTP 500、`hash => false` で認証バイパス（HTTP 200）を再現しました。ここからは、`patches/tokenguard-is-string-fix.patch`（[下の「2. 修正」](#2-修正)にある、まさに2行のバックポート修正）を実際に適用し、同じ攻撃が通らなくなることを確認します。
+ここまでは**未修正**のまま実行しました。ここからは、`patches/tokenguard-is-string-fix.patch`（[下の「2. 修正」](#2-修正)にある、まさに2行のバックポート修正）を実際に適用し、同じ攻撃が通らなくなることを確認します。
 
 `composer.json` の `extra.patches.laravel/framework` に `patches/tokenguard-is-string-fix.patch` を登録し、フレームワークを再インストールして設定キャッシュを消去します。
 
@@ -70,12 +73,14 @@ docker compose exec -u sail laravel.test composer reinstall laravel/framework --
 docker compose exec -u sail laravel.test php artisan config:clear
 ```
 
+`composer reinstall` が「Package is not installed」と報告する場合は、先に `composer install --prefer-dist --no-interaction` を一度実行してから `reinstall` をやり直してください。`extra.patches` の登録を外した上で同じ2コマンドを再実行すれば、既定の**未修正**状態に戻せます。
+
 | | 修正前 | 修正後 |
 |-|-|-|
+| `hash` 省略（このリポジトリの既定、`false` 扱い）で配列を送信 | HTTP 200（認証バイパス） | **HTTP 401**（データベースに到達しない） |
 | `hash => true` で配列を送信 | HTTP 500（例外） | **HTTP 401**（型チェックで即拒否） |
-| `hash => false` で配列を送信 | HTTP 200（認証バイパス） | **HTTP 401**（データベースに到達しない） |
 
-同じ `{"api_token":[0]}` のリクエストを `hash => true` と `hash => false` の両方で再送し、どちらも HTTP 401 になり、`EloquentUserProvider` のクエリまで到達しないことを確認してください。ログイン処理はハッシュを保存するため、通常のトークン認証を確認する際は `hash => true` に戻して設定キャッシュを消去します。
+同じ `{"api_token":[0]}` のリクエストを `hash => true` と `hash => false` の両方で再送し、どちらも HTTP 401 になり、`EloquentUserProvider` のクエリまで到達しないことを確認してください。
 
 `docker compose down -v` で停止・削除します（`-v` を付けると MySQL のデータボリュームも削除されます）。
 
@@ -157,7 +162,7 @@ grep -rn "TokenGuard" app/ config/           # コピー・オーバーライド
 > [!WARNING]
 > **ローカル環境でのセキュリティ研究・学習専用です。本番環境へのデプロイやインターネットへの公開は絶対にしないでください。** 認証設定は意図的に安全でない状態です。使い捨てのデータと、自分が所有するか、テストの許可を得たシステムだけを使用してください。
 >
-> **既定ではパッチは登録されていません。** 未修正の `TokenGuard::user()` がそのまま動作するため、以下で説明する脆弱な挙動は最初から有効です。実際の修正パッチを登録する方法は[分析](docs/analysis.ja.md#このリポジトリでのパッチ管理)を参照してください。
+> **既定ではパッチは登録されておらず、`guards.api.hash` も既定で省略**（`false` 扱い）**されています。** 未修正の `TokenGuard::user()` がそのまま動作し、デモユーザーのシードトークンもバイパスが毎回決定的に再現するよう選んであるため、以下で説明する脆弱な挙動は最初から有効です。実際の修正パッチを登録する方法は[分析](docs/analysis.ja.md#このリポジトリでのパッチ管理)を参照してください。
 
 ## さらに詳しく
 

