@@ -1,5 +1,7 @@
 # Laravel TokenGuard Authentication Bypass — Local Reproduction
 
+[日本語](README.ja.md)
+
 This project demonstrates and explains the authentication bypass vulnerability in Laravel's legacy `Illuminate\Auth\TokenGuard`, tracked as [**GHSA-f9x3-7vq9-cph6**](https://github.com/laravel/framework/security/advisories/GHSA-f9x3-7vq9-cph6).
 
 It uses a Laravel 8.5-era application to illustrate why a non-string API token can reach an Eloquent database query, and how the `hash` configuration affects the observed behavior.
