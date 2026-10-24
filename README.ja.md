@@ -59,7 +59,9 @@ curl -i -X GET http://localhost:8000/api/user \
 
 未修正の状態では、`hash => true` で HTTP 500 が観測されています。`config/auth.php` の `guards.api.hash` を `false` に変更し、`php artisan config:clear` をコンテナ内で実行して同じリクエストを送ると、数値比較に一致するトークンが保存されている場合は認証がバイパスされます。結果は保存値にも依存します。初期シードの `api_token` はすべて `null` なので、先にログインしてトークンを保存する必要があります。`hash` の変更だけなら Composer の再実行は不要です。
 
-### 修正後の挙動を確認する
+### ✅ 修正を適用して効果を確認する
+
+ここまでは**未修正**のまま、`hash => true` で HTTP 500、`hash => false` で認証バイパス（HTTP 200）を再現しました。ここからは、`patches/tokenguard-is-string-fix.patch`（[下の「2. 修正」](#2-修正)にある、まさに2行のバックポート修正）を実際に適用し、同じ攻撃が通らなくなることを確認します。
 
 `composer.json` の `extra.patches.laravel/framework` に `patches/tokenguard-is-string-fix.patch` を登録し、フレームワークを再インストールして設定キャッシュを消去します。
 
@@ -68,7 +70,12 @@ docker compose exec -u sail laravel.test composer reinstall laravel/framework --
 docker compose exec -u sail laravel.test php artisan config:clear
 ```
 
-配列のリクエストが HTTP 401 で拒否されることを確認してください。ログイン処理はハッシュを保存するため、通常のトークン認証を確認する際は `hash => true` に戻して設定キャッシュを消去します。
+| | 修正前 | 修正後 |
+|-|-|-|
+| `hash => true` で配列を送信 | HTTP 500（例外） | **HTTP 401**（型チェックで即拒否） |
+| `hash => false` で配列を送信 | HTTP 200（認証バイパス） | **HTTP 401**（データベースに到達しない） |
+
+同じ `{"api_token":[0]}` のリクエストを `hash => true` と `hash => false` の両方で再送し、どちらも HTTP 401 になり、`EloquentUserProvider` のクエリまで到達しないことを確認してください。ログイン処理はハッシュを保存するため、通常のトークン認証を確認する際は `hash => true` に戻して設定キャッシュを消去します。
 
 `docker compose down -v` で停止・削除します（`-v` を付けると MySQL のデータボリュームも削除されます）。
 

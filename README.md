@@ -59,7 +59,9 @@ curl -i -X GET http://localhost:8000/api/user \
 
 With the unpatched guard, HTTP 500 has been observed with `hash => true`. Change `guards.api.hash` in `config/auth.php` to `false`, run `php artisan config:clear` inside the container, and repeat the request: authentication can be bypassed if a stored token matches the numeric comparison. The result depends on the stored values. All initially seeded `api_token` values are `null`, so log in first to store a token. Changing `hash` alone does not require rerunning Composer.
 
-### Check the fix
+### ✅ Apply the fix and confirm it works
+
+So far, everything above ran **unpatched**: HTTP 500 with `hash => true`, and an authentication bypass (HTTP 200) with `hash => false`. Now apply `patches/tokenguard-is-string-fix.patch` — the exact two-line backport from [Fix](#2-fix) below — and confirm the same attack no longer works.
 
 Register `patches/tokenguard-is-string-fix.patch` under `extra.patches.laravel/framework` in `composer.json`, then reinstall the framework and clear the configuration cache:
 
@@ -68,7 +70,12 @@ docker compose exec -u sail laravel.test composer reinstall laravel/framework --
 docker compose exec -u sail laravel.test php artisan config:clear
 ```
 
-Confirm that the array request is rejected with HTTP 401. The login handler stores hashed tokens, so restore `hash => true` and clear the configuration cache when checking normal token authentication.
+| | Before the fix | After the fix |
+|-|-|-|
+| Array sent with `hash => true` | HTTP 500 (exception) | **HTTP 401** (rejected by the type check) |
+| Array sent with `hash => false` | HTTP 200 (auth bypass) | **HTTP 401** (never reaches the database) |
+
+Resend the same `{"api_token":[0]}` request under both `hash => true` and `hash => false`: both should now return HTTP 401, and the request should never reach `EloquentUserProvider`'s query. The login handler stores hashed tokens, so restore `hash => true` and clear the configuration cache when checking normal token authentication.
 
 Tear down with `docker compose down -v` (the `-v` also removes the MySQL data volume).
 
