@@ -25,6 +25,10 @@ This demonstration focuses on the combination of:
 
 That skeleton change does not mean upgrading is itself a fix. **`Illuminate\Auth\TokenGuard` was not removed or changed by this** — it is still present and unchanged in `laravel/framework` today. An existing application that already had a `token`-driver `api` guard before upgrading carries that guard, and this bug, forward through 9, 10, 11, 12, and 13 untouched, for as long as `config/auth.php` keeps that guard. The clearest evidence of this: an official fix had to be shipped for 11.56.1, 12.68.0, and 13.29.0 (see [How far back this goes](#how-far-back-this-goes-and-how-little-of-it-is-patched) below). If simply moving to a newer major version closed this on its own, none of those patches would have been necessary. A naive "just bump the Laravel version" upgrade, without reviewing `config/auth.php`, leaves this open.
 
+### Hiding the endpoint is not a mitigation
+
+Not advertising a route (no public docs, no obvious name) only raises the cost of finding it, and for apps with a mobile or JS client that cost is close to zero. Decompiling an APK, or reading a web app's bundled JS, hands an attacker the exact route, the exact parameter name (`api_token`), and the exact response shape — no guessing required. This reconnaissance pattern (sometimes called an "A2B", app-to-backend, attack) is exactly what defeats security-by-obscurity here: it turns "find a vulnerable endpoint" into "install the app once." Any route behind the same guard is a valid target, not just `/api/user`, so an attacker only needs to find one of potentially many.
+
 ## Root cause
 
 Older versions of `TokenGuard::user()` did not verify that the supplied API token was a string:
@@ -78,7 +82,7 @@ Laravel's support policy provides bug fixes for 18 months and security fixes for
 |12|2027-02-24|12.68.0|
 |13|2028-03-17 (current)|13.29.0|
 
-Every other line that ever shipped the vulnerable branch — **5.6 through 5.8, and all of 6, 7, 8, 9, and 10** — is permanently end-of-life, spanning releases from roughly 2018 through early 2023. None of them will ever receive this fix, or any future security fix, no matter how severe; the only way to close this issue on those lines is the backport in the [README](../README.md#2-fix), or a major-version upgrade. Of all the release lines that ever carried this bug, the ones that got an official fix (11, 12, 13) are the minority.
+Every other line that ever shipped the vulnerable branch — **5.6 through 5.8, and all of 6, 7, 8, 9, and 10** — is permanently end-of-life, spanning releases from roughly 2018 through early 2023. None of them will ever receive this fix, or any future security fix, no matter how severe; the only way to close this issue on those lines is the backport in the [README](../README.md), or a major-version upgrade. Of all the release lines that ever carried this bug, the ones that got an official fix (11, 12, 13) are the minority.
 
 ### Dependency scanners don't cover this gap either
 
@@ -95,11 +99,11 @@ $ composer audit --locked   # against main's composer.lock, laravel/framework v8
 ...same result, this CVE never appears...
 ```
 
-Both lockfiles report plenty of *other*, unrelated advisories — so the local advisory database being used is current, not stale — but neither run ever surfaces GHSA-f9x3-7vq9-cph6. An application on Laravel 5.6–10.x (or an unpatched 11/12/13 point release) gets a clean `composer audit` and a quiet Dependabot tab while still being fully exploitable. Whether scanners flag unpatched 11.x (`< 11.56.1`) is not something I verified. The only reliable check is the manual one in the [README](../README.md#1-are-you-affected-about-1-minute).
+Both lockfiles report plenty of *other*, unrelated advisories — so the local advisory database being used is current, not stale — but neither run ever surfaces GHSA-f9x3-7vq9-cph6. An application on Laravel 5.6–10.x (or an unpatched 11/12/13 point release) gets a clean `composer audit` and a quiet Dependabot tab while still being fully exploitable. Whether scanners flag unpatched 11.x (`< 11.56.1`) is not something I verified. The only reliable check is manual: look at `config/auth.php` yourself, as described in the [README](../README.md).
 
 ## How this repository manages patches
 
-This is a worked example of the "maintain a reproducible patch" advice in the [README](../README.md#2-fix), using [`cweagans/composer-patches`](https://github.com/cweagans/composer-patches) so edits to `vendor/` survive a fresh `composer install`:
+This is a worked example of the "maintain a reproducible patch" advice in the [README](../README.md), using [`cweagans/composer-patches`](https://github.com/cweagans/composer-patches) so edits to `vendor/` survive a fresh `composer install`:
 
 ```json
 "extra": {
@@ -110,7 +114,7 @@ This is a worked example of the "maintain a reproducible patch" advice in the [R
 ```
 
 * No patch is registered by default (`extra.patches` is absent from `composer.json`). `composer install` applies the framework exactly as upstream ships it, so `TokenGuard::user()` runs unmodified and the vulnerable behavior is observable out of the box — this repository's purpose is reproduction.
-* `patches/tokenguard-is-string-fix.patch` contains the real backport (the two diffs in the [README](../README.md#2-fix)) but is **not referenced from `extra.patches`**, so it never applies on its own.
+* [`patches/tokenguard-is-string-fix.patch`](../patches/tokenguard-is-string-fix.patch) contains the real backport (the two diffs in the [README](../README.md)) but is **not referenced from `extra.patches`**, so it never applies on its own.
 
 To verify the real fix, register that patch and reinstall `laravel/framework` so the plugin applies it:
 
