@@ -25,22 +25,22 @@ docker compose exec -u sail laravel.test php artisan migrate --seed
 
 デモ用ユーザー（`demo@example.com` / `password`）と、ランダムな 9 ユーザーが作成されます。アプリは `http://localhost:8000` で起動します（8000 番が使用中なら `.env` の `APP_PORT` を変更してください）。
 
-ログインしてトークンを取得します。
-
-```bash
-curl -s -X POST http://localhost:8000/api/login \
-  -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"email":"demo@example.com","password":"password"}'
-```
-
-まず、配列の入力が届くことを確認します。
+ログインもトークンも、認証情報も一切なしで、配列の `api_token` を保護されたルートに直接送ります。
 
 ```bash
 curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
   --data-urlencode 'api_token[]=x'
 ```
 
-既定ではパッチは登録されていないため、`TokenGuard::user()` はそのまま動作し、配列が `hash()` と `EloquentUserProvider` にそのまま渡されます。既定の `hash => true` では、途中で拒否されるのではなく HTTP 500 になります（下記参照）。これにより、配列の入力がガードまで届いていることを確認できます。
+既定ではパッチは登録されていないため、`TokenGuard::user()` はそのまま動作し、配列が `hash()` と `EloquentUserProvider` にそのまま渡されます。既定の `hash => true` では、途中で拒否されるのではなく HTTP 500 になります（下記参照）。未認証のリクエスト1発だけで、配列の入力がガードまで届いていることを確認できます。
+
+次に、ログインしてトークンを取得します。これは、この後の通常の認証確認と、下のバイパステストで使う `api_token` をDBに保存するために必要です。
+
+```bash
+curl -s -X POST http://localhost:8000/api/login \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"email":"demo@example.com","password":"password"}'
+```
 
 ログインで取得した `access_token` を使い、通常の認証を確認します（既定の `hash => true` の場合）。
 

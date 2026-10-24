@@ -25,22 +25,22 @@ docker compose exec -u sail laravel.test php artisan migrate --seed
 
 This seeds a demo user (`demo@example.com` / `password`) alongside 9 random users. The app is now at `http://localhost:8000` (change `APP_PORT` in `.env` if 8000 is taken).
 
-Log in and fetch a token:
-
-```bash
-curl -s -X POST http://localhost:8000/api/login \
-  -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"email":"demo@example.com","password":"password"}'
-```
-
-First, check that the array input reaches the guard:
+No login, no token, no credentials — send an array-valued `api_token` straight at a protected route:
 
 ```bash
 curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
   --data-urlencode 'api_token[]=x'
 ```
 
-No patch is registered by default, so `TokenGuard::user()` runs unmodified and the array is passed straight through to `hash()` and `EloquentUserProvider`. With the default `hash => true`, this produces HTTP 500 (see below) rather than being rejected earlier in the stack — confirming the array input reaches the guard.
+No patch is registered by default, so `TokenGuard::user()` runs unmodified and the array is passed straight through to `hash()` and `EloquentUserProvider`. With the default `hash => true`, this produces HTTP 500 (see below) rather than being rejected earlier in the stack — one unauthenticated request is enough to confirm the array input reaches the guard.
+
+Now log in and fetch a token, needed for the normal-authentication check and to seed a stored `api_token` for the bypass test below:
+
+```bash
+curl -s -X POST http://localhost:8000/api/login \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"email":"demo@example.com","password":"password"}'
+```
 
 Check normal authentication using the `access_token` returned by login (with the default `hash => true`):
 
