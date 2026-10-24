@@ -25,31 +25,21 @@ docker compose exec -u sail laravel.test php artisan migrate --seed
 
 デモ用ユーザー（`demo@example.com` / `password`）と、ランダムな 9 ユーザーが作成されます。アプリは `http://localhost:8000` で起動します（8000 番が使用中なら `.env` の `APP_PORT` を変更してください）。
 
-ログインしてトークンを取得します。
-
-```bash
-curl -s -X POST http://localhost:8000/api/login \
-  -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"email":"demo@example.com","password":"password"}'
-```
-
-まず、配列の入力が届くことを確認します。
+ログインもトークンも、認証情報も一切なしで、配列の `api_token` を保護されたルートに直接送ります。
 
 ```bash
 curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
   --data-urlencode 'api_token[]=x'
 ```
 
-既定ではデモパッチが `TokenGuard::user()` に `print_r($token); exit;` を挿入するため、配列が表示されます。これは入力の確認用です。有効なトークンを渡した場合も、この位置で処理が終了します。
+既定ではパッチは登録されていないため、`TokenGuard::user()` はそのまま動作し、配列が `hash()` と `EloquentUserProvider` にそのまま渡されます。既定の `hash => true` では、途中で拒否されるのではなく HTTP 500 になります（下記参照）。未認証のリクエスト1発だけで、配列の入力がガードまで届いていることを確認できます。
 
-### デモパッチを外して未修正の挙動を確認する
-
-1. `composer.json` の `extra.patches` から `laravel/framework` のデモパッチ登録を削除します。修正パッチも登録しない状態にします。
-2. 以下でフレームワークを再インストールし、設定キャッシュを消去します。`composer.lock` は保持します。
+次に、ログインしてトークンを取得します。これは、この後の通常の認証確認と、下のバイパステストで使う `api_token` をDBに保存するために必要です。
 
 ```bash
-docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
-docker compose exec -u sail laravel.test php artisan config:clear
+curl -s -X POST http://localhost:8000/api/login \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"email":"demo@example.com","password":"password"}'
 ```
 
 ログインで取得した `access_token` を使い、通常の認証を確認します（既定の `hash => true` の場合）。
@@ -69,9 +59,23 @@ curl -i -X GET http://localhost:8000/api/user \
 
 未修正の状態では、`hash => true` で HTTP 500 が観測されています。`config/auth.php` の `guards.api.hash` を `false` に変更し、`php artisan config:clear` をコンテナ内で実行して同じリクエストを送ると、数値比較に一致するトークンが保存されている場合は認証がバイパスされます。結果は保存値にも依存します。初期シードの `api_token` はすべて `null` なので、先にログインしてトークンを保存する必要があります。`hash` の変更だけなら Composer の再実行は不要です。
 
-### 修正後の挙動を確認する
+### ✅ 修正を適用して効果を確認する
 
-`extra.patches.laravel/framework` に `patches/tokenguard-is-string-fix.patch` のみを登録し、上の `composer reinstall` を再実行します。配列のリクエストが HTTP 401 で拒否されることを確認してください。ログイン処理はハッシュを保存するため、通常のトークン認証を確認する際は `hash => true` に戻して設定キャッシュを消去します。
+ここまでは**未修正**のまま、`hash => true` で HTTP 500、`hash => false` で認証バイパス（HTTP 200）を再現しました。ここからは、`patches/tokenguard-is-string-fix.patch`（[下の「2. 修正」](#2-修正)にある、まさに2行のバックポート修正）を実際に適用し、同じ攻撃が通らなくなることを確認します。
+
+`composer.json` の `extra.patches.laravel/framework` に `patches/tokenguard-is-string-fix.patch` を登録し、フレームワークを再インストールして設定キャッシュを消去します。
+
+```bash
+docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
+docker compose exec -u sail laravel.test php artisan config:clear
+```
+
+| | 修正前 | 修正後 |
+|-|-|-|
+| `hash => true` で配列を送信 | HTTP 500（例外） | **HTTP 401**（型チェックで即拒否） |
+| `hash => false` で配列を送信 | HTTP 200（認証バイパス） | **HTTP 401**（データベースに到達しない） |
+
+同じ `{"api_token":[0]}` のリクエストを `hash => true` と `hash => false` の両方で再送し、どちらも HTTP 401 になり、`EloquentUserProvider` のクエリまで到達しないことを確認してください。ログイン処理はハッシュを保存するため、通常のトークン認証を確認する際は `hash => true` に戻して設定キャッシュを消去します。
 
 `docker compose down -v` で停止・削除します（`-v` を付けると MySQL のデータボリュームも削除されます）。
 
@@ -153,7 +157,7 @@ grep -rn "TokenGuard" app/ config/           # コピー・オーバーライド
 > [!WARNING]
 > **ローカル環境でのセキュリティ研究・学習専用です。本番環境へのデプロイやインターネットへの公開は絶対にしないでください。** 認証設定は意図的に安全でない状態です。使い捨てのデータと、自分が所有するか、テストの許可を得たシステムだけを使用してください。
 >
-> **デモ用パッチは標準で有効です。** `composer install` の後、`patches/tokenguard-debug-dump.patch` が `TokenGuard::user()` に `print_r($token); exit;` を挿入し、配列を確認できるようにします。このアプリケーションは、この問題に対して修正されていません。実際の修正に切り替える方法は[分析](docs/analysis.ja.md#このリポジトリでのパッチ管理)を参照してください。
+> **既定ではパッチは登録されていません。** 未修正の `TokenGuard::user()` がそのまま動作するため、以下で説明する脆弱な挙動は最初から有効です。実際の修正パッチを登録する方法は[分析](docs/analysis.ja.md#このリポジトリでのパッチ管理)を参照してください。
 
 ## さらに詳しく
 

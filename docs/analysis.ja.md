@@ -105,22 +105,20 @@ $ composer audit --locked   # main の composer.lock、laravel/framework v8.5.0
 
 ```json
 "extra": {
-    "patches": {
-        "laravel/framework": {
-            "Demo: dump api_token before auth lookup (TokenGuard)": "patches/tokenguard-debug-dump.patch"
-        }
+    "laravel": {
+        "dont-discover": []
     }
 }
 ```
 
-* `patches/tokenguard-debug-dump.patch` は、**標準で登録・有効化されています**。`TokenGuard::user()` に `print_r($token); exit;` を挿入し、配列の `api_token` を送信すると、文字列ではなく PHP の配列であることを出力で確認できます。このリポジトリの目的は再現なので、標準では脆弱性の修正を適用していません。
-* `patches/tokenguard-is-string-fix.patch` には、実際のバックポート（[README](../README.ja.md#2-修正)の 2 つの差分）が含まれています。ただし、**意図的に `extra.patches` から参照していない**ため、自動では適用されません。
+* 既定ではパッチは登録されていません（`composer.json` に `extra.patches` はありません）。`composer install` はフレームワークをアップストリームのまま適用するため、`TokenGuard::user()` はそのまま動作し、脆弱な挙動を最初から確認できます。このリポジトリの目的は再現なので、標準では脆弱性の修正を適用していません。
+* `patches/tokenguard-is-string-fix.patch` には、実際のバックポート（[README](../README.ja.md#2-修正)の 2 つの差分）が含まれています。ただし、**`extra.patches` から参照していない**ため、自動では適用されません。
 
-デモ用の出力ではなく実際の修正を検証するには、登録するパッチを切り替えてから `laravel/framework` を再インストールし、プラグインに再適用させます。
+実際の修正を検証するには、このパッチを登録してから `laravel/framework` を再インストールし、プラグインに適用させます。
 
 ```sh
-# composer.json の extra.patches.laravel/framework の参照先を
-# patches/tokenguard-is-string-fix.patch に変更してから実行:
+# composer.json の extra.patches.laravel/framework に
+# patches/tokenguard-is-string-fix.patch を追加してから実行:
 rm -rf vendor composer.lock
 composer install --prefer-dist --no-interaction
 # インストールログに次の表示があることを確認:
@@ -128,7 +126,7 @@ composer install --prefer-dist --no-interaction
 #       patches/tokenguard-is-string-fix.patch (...)
 ```
 
-切り替え後は、配列の `api_token` を持つリクエストがデータベースに到達せず、HTTP 401 を返すはずです。
+修正パッチを登録すると、配列の `api_token` を持つリクエストはデータベースに到達せず、HTTP 401 を返すはずです。
 
 ## 参考資料
 

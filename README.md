@@ -25,31 +25,21 @@ docker compose exec -u sail laravel.test php artisan migrate --seed
 
 This seeds a demo user (`demo@example.com` / `password`) alongside 9 random users. The app is now at `http://localhost:8000` (change `APP_PORT` in `.env` if 8000 is taken).
 
-Log in and fetch a token:
-
-```bash
-curl -s -X POST http://localhost:8000/api/login \
-  -H 'Content-Type: application/json' -H 'Accept: application/json' \
-  -d '{"email":"demo@example.com","password":"password"}'
-```
-
-First, check that the array input reaches the guard:
+No login, no token, no credentials — send an array-valued `api_token` straight at a protected route:
 
 ```bash
 curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
   --data-urlencode 'api_token[]=x'
 ```
 
-The default demo patch inserts `print_r($token); exit;` into `TokenGuard::user()`, so this displays the array. This only demonstrates input handling. A valid token also stops at this point.
+No patch is registered by default, so `TokenGuard::user()` runs unmodified and the array is passed straight through to `hash()` and `EloquentUserProvider`. With the default `hash => true`, this produces HTTP 500 (see below) rather than being rejected earlier in the stack — one unauthenticated request is enough to confirm the array input reaches the guard.
 
-### Remove the demo patch to observe the unpatched behavior
-
-1. Remove the demo patch entry for `laravel/framework` from `extra.patches` in `composer.json`. Leave the fix patch unregistered too.
-2. Reinstall the framework and clear the configuration cache. Keep `composer.lock`.
+Now log in and fetch a token, needed for the normal-authentication check and to seed a stored `api_token` for the bypass test below:
 
 ```bash
-docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
-docker compose exec -u sail laravel.test php artisan config:clear
+curl -s -X POST http://localhost:8000/api/login \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"email":"demo@example.com","password":"password"}'
 ```
 
 Check normal authentication using the `access_token` returned by login (with the default `hash => true`):
@@ -69,9 +59,23 @@ curl -i -X GET http://localhost:8000/api/user \
 
 With the unpatched guard, HTTP 500 has been observed with `hash => true`. Change `guards.api.hash` in `config/auth.php` to `false`, run `php artisan config:clear` inside the container, and repeat the request: authentication can be bypassed if a stored token matches the numeric comparison. The result depends on the stored values. All initially seeded `api_token` values are `null`, so log in first to store a token. Changing `hash` alone does not require rerunning Composer.
 
-### Check the fix
+### ✅ Apply the fix and confirm it works
 
-Register only `patches/tokenguard-is-string-fix.patch` under `extra.patches.laravel/framework` and repeat the `composer reinstall` command above. Confirm that the array request is rejected with HTTP 401. The login handler stores hashed tokens, so restore `hash => true` and clear the configuration cache when checking normal token authentication.
+So far, everything above ran **unpatched**: HTTP 500 with `hash => true`, and an authentication bypass (HTTP 200) with `hash => false`. Now apply `patches/tokenguard-is-string-fix.patch` — the exact two-line backport from [Fix](#2-fix) below — and confirm the same attack no longer works.
+
+Register `patches/tokenguard-is-string-fix.patch` under `extra.patches.laravel/framework` in `composer.json`, then reinstall the framework and clear the configuration cache:
+
+```bash
+docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
+docker compose exec -u sail laravel.test php artisan config:clear
+```
+
+| | Before the fix | After the fix |
+|-|-|-|
+| Array sent with `hash => true` | HTTP 500 (exception) | **HTTP 401** (rejected by the type check) |
+| Array sent with `hash => false` | HTTP 200 (auth bypass) | **HTTP 401** (never reaches the database) |
+
+Resend the same `{"api_token":[0]}` request under both `hash => true` and `hash => false`: both should now return HTTP 401, and the request should never reach `EloquentUserProvider`'s query. The login handler stores hashed tokens, so restore `hash => true` and clear the configuration cache when checking normal token authentication.
 
 Tear down with `docker compose down -v` (the `-v` also removes the MySQL data volume).
 
@@ -153,7 +157,7 @@ A Laravel 8.5 application (the last skeleton that scaffolds the `token` guard) k
 > [!WARNING]
 > **Local security research and education only. Never deploy this or expose it to the internet.** Its authentication setup is intentionally insecure. Use disposable data and systems you own or are authorized to test.
 >
-> **The demo patch is active by default.** After `composer install`, `patches/tokenguard-debug-dump.patch` inserts `print_r($token); exit;` into `TokenGuard::user()` so you can see the array. The app is not patched against this issue. Switching to the real fix is covered in the [analysis](docs/analysis.md#how-this-repository-manages-patches).
+> **No patch is registered by default.** The app runs the unpatched `TokenGuard::user()` as-is, so the vulnerable behavior described below is live out of the box. Registering the real fix patch is covered in the [analysis](docs/analysis.md#how-this-repository-manages-patches).
 
 ## Learn more
 
