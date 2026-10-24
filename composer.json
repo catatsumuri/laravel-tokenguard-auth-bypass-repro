@@ -33,11 +33,6 @@
     "extra": {
         "laravel": {
             "dont-discover": []
-        },
-        "patches": {
-            "laravel/framework": {
-                "Demo: dump api_token before auth lookup (TokenGuard)": "patches/tokenguard-debug-dump.patch"
-            }
         }
     },
     "autoload": {

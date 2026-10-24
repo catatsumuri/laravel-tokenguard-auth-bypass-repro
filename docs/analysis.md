@@ -103,22 +103,20 @@ This is a worked example of the "maintain a reproducible patch" advice in the [R
 
 ```json
 "extra": {
-    "patches": {
-        "laravel/framework": {
-            "Demo: dump api_token before auth lookup (TokenGuard)": "patches/tokenguard-debug-dump.patch"
-        }
+    "laravel": {
+        "dont-discover": []
     }
 }
 ```
 
-* `patches/tokenguard-debug-dump.patch` is **wired in and active by default**. It inserts a `print_r($token); exit;` marker in `TokenGuard::user()` so that submitting an array-valued `api_token` visibly dumps a PHP array instead of a string — this repository's purpose is reproduction, so the vulnerable behavior stays on by default.
-* `patches/tokenguard-is-string-fix.patch` contains the real backport (the two diffs in the [README](../README.md#2-fix)) but is **deliberately not referenced from `extra.patches`**, so it never applies on its own.
+* No patch is registered by default (`extra.patches` is absent from `composer.json`). `composer install` applies the framework exactly as upstream ships it, so `TokenGuard::user()` runs unmodified and the vulnerable behavior is observable out of the box — this repository's purpose is reproduction.
+* `patches/tokenguard-is-string-fix.patch` contains the real backport (the two diffs in the [README](../README.md#2-fix)) but is **not referenced from `extra.patches`**, so it never applies on its own.
 
-To verify the real fix instead of the demo marker, swap which patch is registered, then reinstall `laravel/framework` so the plugin reapplies it:
+To verify the real fix, register that patch and reinstall `laravel/framework` so the plugin applies it:
 
 ```sh
-# edit extra.patches.laravel/framework in composer.json to point at
-# patches/tokenguard-is-string-fix.patch instead, then:
+# add patches/tokenguard-is-string-fix.patch under
+# extra.patches.laravel/framework in composer.json, then:
 rm -rf vendor composer.lock
 composer install --prefer-dist --no-interaction
 # the install log should read:
@@ -126,7 +124,7 @@ composer install --prefer-dist --no-interaction
 #       patches/tokenguard-is-string-fix.patch (...)
 ```
 
-After switching, a request with an array-valued `api_token` should receive HTTP 401 instead of reaching the database.
+After registering the fix, a request with an array-valued `api_token` should receive HTTP 401 instead of reaching the database.
 
 ## References
 

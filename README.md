@@ -40,17 +40,7 @@ curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
   --data-urlencode 'api_token[]=x'
 ```
 
-The default demo patch inserts `print_r($token); exit;` into `TokenGuard::user()`, so this displays the array. This only demonstrates input handling. A valid token also stops at this point.
-
-### Remove the demo patch to observe the unpatched behavior
-
-1. Remove the demo patch entry for `laravel/framework` from `extra.patches` in `composer.json`. Leave the fix patch unregistered too.
-2. Reinstall the framework and clear the configuration cache. Keep `composer.lock`.
-
-```bash
-docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
-docker compose exec -u sail laravel.test php artisan config:clear
-```
+No patch is registered by default, so `TokenGuard::user()` runs unmodified and the array is passed straight through to `hash()` and `EloquentUserProvider`. With the default `hash => true`, this produces HTTP 500 (see below) rather than being rejected earlier in the stack — confirming the array input reaches the guard.
 
 Check normal authentication using the `access_token` returned by login (with the default `hash => true`):
 
@@ -71,7 +61,14 @@ With the unpatched guard, HTTP 500 has been observed with `hash => true`. Change
 
 ### Check the fix
 
-Register only `patches/tokenguard-is-string-fix.patch` under `extra.patches.laravel/framework` and repeat the `composer reinstall` command above. Confirm that the array request is rejected with HTTP 401. The login handler stores hashed tokens, so restore `hash => true` and clear the configuration cache when checking normal token authentication.
+Register `patches/tokenguard-is-string-fix.patch` under `extra.patches.laravel/framework` in `composer.json`, then reinstall the framework and clear the configuration cache:
+
+```bash
+docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
+docker compose exec -u sail laravel.test php artisan config:clear
+```
+
+Confirm that the array request is rejected with HTTP 401. The login handler stores hashed tokens, so restore `hash => true` and clear the configuration cache when checking normal token authentication.
 
 Tear down with `docker compose down -v` (the `-v` also removes the MySQL data volume).
 
@@ -153,7 +150,7 @@ A Laravel 8.5 application (the last skeleton that scaffolds the `token` guard) k
 > [!WARNING]
 > **Local security research and education only. Never deploy this or expose it to the internet.** Its authentication setup is intentionally insecure. Use disposable data and systems you own or are authorized to test.
 >
-> **The demo patch is active by default.** After `composer install`, `patches/tokenguard-debug-dump.patch` inserts `print_r($token); exit;` into `TokenGuard::user()` so you can see the array. The app is not patched against this issue. Switching to the real fix is covered in the [analysis](docs/analysis.md#how-this-repository-manages-patches).
+> **No patch is registered by default.** The app runs the unpatched `TokenGuard::user()` as-is, so the vulnerable behavior described below is live out of the box. Registering the real fix patch is covered in the [analysis](docs/analysis.md#how-this-repository-manages-patches).
 
 ## Learn more
 

@@ -40,17 +40,7 @@ curl -sS -G http://localhost:8000/api/user -H 'Accept: application/json' \
   --data-urlencode 'api_token[]=x'
 ```
 
-既定ではデモパッチが `TokenGuard::user()` に `print_r($token); exit;` を挿入するため、配列が表示されます。これは入力の確認用です。有効なトークンを渡した場合も、この位置で処理が終了します。
-
-### デモパッチを外して未修正の挙動を確認する
-
-1. `composer.json` の `extra.patches` から `laravel/framework` のデモパッチ登録を削除します。修正パッチも登録しない状態にします。
-2. 以下でフレームワークを再インストールし、設定キャッシュを消去します。`composer.lock` は保持します。
-
-```bash
-docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
-docker compose exec -u sail laravel.test php artisan config:clear
-```
+既定ではパッチは登録されていないため、`TokenGuard::user()` はそのまま動作し、配列が `hash()` と `EloquentUserProvider` にそのまま渡されます。既定の `hash => true` では、途中で拒否されるのではなく HTTP 500 になります（下記参照）。これにより、配列の入力がガードまで届いていることを確認できます。
 
 ログインで取得した `access_token` を使い、通常の認証を確認します（既定の `hash => true` の場合）。
 
@@ -71,7 +61,14 @@ curl -i -X GET http://localhost:8000/api/user \
 
 ### 修正後の挙動を確認する
 
-`extra.patches.laravel/framework` に `patches/tokenguard-is-string-fix.patch` のみを登録し、上の `composer reinstall` を再実行します。配列のリクエストが HTTP 401 で拒否されることを確認してください。ログイン処理はハッシュを保存するため、通常のトークン認証を確認する際は `hash => true` に戻して設定キャッシュを消去します。
+`composer.json` の `extra.patches.laravel/framework` に `patches/tokenguard-is-string-fix.patch` を登録し、フレームワークを再インストールして設定キャッシュを消去します。
+
+```bash
+docker compose exec -u sail laravel.test composer reinstall laravel/framework --prefer-dist --no-interaction
+docker compose exec -u sail laravel.test php artisan config:clear
+```
+
+配列のリクエストが HTTP 401 で拒否されることを確認してください。ログイン処理はハッシュを保存するため、通常のトークン認証を確認する際は `hash => true` に戻して設定キャッシュを消去します。
 
 `docker compose down -v` で停止・削除します（`-v` を付けると MySQL のデータボリュームも削除されます）。
 
@@ -153,7 +150,7 @@ grep -rn "TokenGuard" app/ config/           # コピー・オーバーライド
 > [!WARNING]
 > **ローカル環境でのセキュリティ研究・学習専用です。本番環境へのデプロイやインターネットへの公開は絶対にしないでください。** 認証設定は意図的に安全でない状態です。使い捨てのデータと、自分が所有するか、テストの許可を得たシステムだけを使用してください。
 >
-> **デモ用パッチは標準で有効です。** `composer install` の後、`patches/tokenguard-debug-dump.patch` が `TokenGuard::user()` に `print_r($token); exit;` を挿入し、配列を確認できるようにします。このアプリケーションは、この問題に対して修正されていません。実際の修正に切り替える方法は[分析](docs/analysis.ja.md#このリポジトリでのパッチ管理)を参照してください。
+> **既定ではパッチは登録されていません。** 未修正の `TokenGuard::user()` がそのまま動作するため、以下で説明する脆弱な挙動は最初から有効です。実際の修正パッチを登録する方法は[分析](docs/analysis.ja.md#このリポジトリでのパッチ管理)を参照してください。
 
 ## さらに詳しく
 
